@@ -21,21 +21,31 @@ wss.on('connection', (ws) => {
 
         const cpuUsagePercentage = ((totalTick - totalIdle) / totalTick) * 100;
 
-        // Get memory information
-        const totalMem = os.totalmem();
-        const freeMem = os.freemem();
-        const memoryUsagePercentage = ((totalMem - freeMem) / totalMem) * 100;
+        const totalMem = os.totalmem(); // Total memory in bytes
+const freeMem = os.freemem();   // Free memory in bytes
 
-        // Get the load averages for 1, 5, and 15 minutes
-        const loadAvg = os.loadavg(); // This returns an array [1min, 5min, 15min]
+// Available memory includes free memory plus memory used by buffers and caches
+const usedMem = totalMem - freeMem; // Memory used (without cache/buffer distinction)
+
+// Convert memory values to GB
+const totalMemGB = (totalMem / (1024 * 1024 * 1024)).toFixed(2);  // Total memory in GB
+const usedMemGB = (usedMem / (1024 * 1024 * 1024)).toFixed(2);    // Used memory in GB
+const freeMemGB = (freeMem / (1024 * 1024 * 1024)).toFixed(2);    // Free memory in GB
+
+// Calculate memory usage percentage
+const memoryUsagePercentage = ((usedMem / totalMem) * 100).toFixed(2);
+
+// Get the load averages for 1, 5, and 15 minutes and round to 2 decimal places
+const loadAvg = os.loadavg().map(avg => avg.toFixed(2)); 
 
         const stats = {
-            cpu: cpuUsagePercentage.toFixed(2), // CPU usage percentage
-            memory: memoryUsagePercentage.toFixed(2), // Memory usage percentage
-            loadAvg: loadAvg // Load averages as an array
+            cpu: cpuUsagePercentage.toFixed(2) + '%', // CPU usage percentage
+            totalMemory: `${totalMemGB} GB`,
+            usedMemory: `${usedMemGB} GB`,
+            freeMemory: `${freeMemGB} GB`,
+            memoryUsage: `${memoryUsagePercentage}%`, 
+            loadAvg: loadAvg 
         };
-
-        console.log('Sending stats:', stats); // Log the stats being sent
 
         // Check if the connection is still open before sending
         if (ws.readyState === WebSocket.OPEN) {
