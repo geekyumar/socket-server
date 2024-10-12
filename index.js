@@ -1,14 +1,35 @@
+const fs = require('fs');
+const http = require('http');
+const https = require('https');
 const WebSocket = require('ws');
 const os = require('os');
 
-const wss = new WebSocket.Server({ port: 3000 });
+// Check if SSL certificate files exist
+const certPath = '/etc/letsencrypt/live/labs.umarfarooq.cloud/fullchain.pem';
+const keyPath = '/etc/letsencrypt/live/labs.umarfarooq.cloud/privkey.pem';
+const sslAvailable = fs.existsSync(certPath) && fs.existsSync(keyPath);
 
-wss.on('connection', (ws) => {
-    console.log('Client connected');
+// Create HTTP server (used for both development and WS in production)
+const httpServer = http.createServer();
 
-    // Send memory and load average stats at regular intervals
+// Create HTTPS server (only in production if SSL is available)
+let httpsServer;
+if (sslAvailable) {
+    httpsServer = https.createServer({
+        cert: fs.readFileSync(certPath),
+        key: fs.readFileSync(keyPath),
+    });
+} else {
+    console.log('SSL certificates not found. Skipping WSS setup.');
+}
+
+// Create WebSocket servers for WS and WSS
+const ws = new WebSocket.Server({ server: httpServer });
+const wss = sslAvailable ? new WebSocket.Server({ server: httpsServer }) : null;
+
+// Common logic to send CPU and memory stats
+const sendStats = (wsClient) => {
     const intervalId = setInterval(() => {
-        // Accurate CPU usage percentage
         const startTime = os.cpus().map(cpu => cpu.times);
 
         setTimeout(() => {
@@ -19,57 +40,60 @@ wss.on('connection', (ws) => {
                 const start = startTime[i];
                 const end = endTime[i];
 
-                const idleStart = start.idle;
-                const idleEnd = end.idle;
-
-                const totalStart = Object.values(start).reduce((acc, val) => acc + val, 0);
-                const totalEnd = Object.values(end).reduce((acc, val) => acc + val, 0);
-
-                idleDiff += idleEnd - idleStart;
-                totalDiff += totalEnd - totalStart;
+                idleDiff += end.idle - start.idle;
+                totalDiff += Object.values(end).reduce((acc, val) => acc + val, 0) -
+                             Object.values(start).reduce((acc, val) => acc + val, 0);
             }
 
             const cpuUsagePercentage = 100 - (100 * idleDiff / totalDiff);
-
-            const totalMem = os.totalmem(); // Total memory in bytes
-            const freeMem = os.freemem();   // Free memory in bytes
-
-            // Calculate used memory (in bytes)
+            const totalMem = os.totalmem();
+            const freeMem = os.freemem();
             const usedMem = totalMem - freeMem;
 
-            // Convert memory values to GB
-            const totalMemGB = (totalMem / (1024 * 1024 * 1024)).toFixed(2);  // Total memory in GB
-            const usedMemGB = (usedMem / (1024 * 1024 * 1024)).toFixed(2);    // Used memory in GB
-            const freeMemGB = (freeMem / (1024 * 1024 * 1024)).toFixed(2);    // Free memory in GB
-
-            // Calculate memory usage percentage
-            const memoryUsagePercentage = ((usedMem / totalMem) * 100).toFixed(2);
-
-            // Get the load averages for 1, 5, and 15 minutes and round to 2 decimal places
-            const loadAvg = os.loadavg().map(avg => avg.toFixed(2));
-
             const stats = {
-                cpu: cpuUsagePercentage.toFixed(2) + '%', // CPU usage percentage
-                totalMemory: `${totalMemGB} GB`,
-                usedMemory: `${usedMemGB} GB`,
-                freeMemory: `${freeMemGB} GB`,
-                memoryUsage: `${memoryUsagePercentage}%`, 
-                loadAvg: loadAvg 
+                cpu: cpuUsagePercentage.toFixed(2) + '%',
+                totalMemory: `${(totalMem / (1024 ** 3)).toFixed(2)} GB`,
+                usedMemory: `${(usedMem / (1024 ** 3)).toFixed(2)} GB`,
+                freeMemory: `${(freeMem / (1024 ** 3)).toFixed(2)} GB`,
+                memoryUsage: `${((usedMem / totalMem) * 100).toFixed(2)}%`,
+                loadAvg: os.loadavg().map(avg => avg.toFixed(2))
             };
 
-            // Check if the connection is still open before sending
-            if (ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify(stats));
+            if (wsClient.readyState === WebSocket.OPEN) {
+                wsClient.send(JSON.stringify(stats));
             }
-        }, 1000); // Collect CPU info after 1 second
+        }, 1000); // Measure CPU usage after 1 second
 
-    }, 1000); // Sends stats every 2 seconds
+    }, 1000); // Send stats every second
 
-    // Clear the interval when the connection is closed
-    ws.on('close', () => {
+    wsClient.on('close', () => {
         console.log('Client disconnected');
         clearInterval(intervalId);
     });
+};
+
+// Handle WS connections
+ws.on('connection', (wsClient) => {
+    console.log('Client connected via WS');
+    sendStats(wsClient);
 });
 
-console.log('WebSocket server is running on ws://localhost:3000');
+// Handle WSS connections (if enabled)
+if (wss) {
+    wss.on('connection', (wsClient) => {
+        console.log('Client connected via WSS');
+        sendStats(wsClient);
+    });
+}
+
+// Start HTTP server for WS on port 4000
+httpServer.listen(4000, () => {
+    console.log('WS server running on ws://localhost:4000');
+});
+
+// Start HTTPS server for WSS on port 3000 (if SSL available)
+if (httpsServer) {
+    httpsServer.listen(3000, () => {
+        console.log('WSS server running on wss://localhost:3000');
+    });
+}
